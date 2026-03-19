@@ -265,6 +265,8 @@ class MedNeXt(nn.Module):
 
         # Used to fix PyTorch checkpointing bug
         self.dummy_tensor = nn.Parameter(torch.tensor([1.]), requires_grad=True)  
+        # Use non-reentrant checkpointing to avoid DDP "variable ready" errors
+        self.checkpoint_kwargs = {"use_reentrant": False}
 
         if deep_supervision:
             self.out_1 = OutBlock(in_channels=n_channels*2, n_classes=n_classes, dim=dim)
@@ -283,7 +285,7 @@ class MedNeXt(nn.Module):
         https://discuss.pytorch.org/t/checkpoint-with-no-grad-requiring-inputs-problem/19117/9
         """
         for l in sequential_block:
-            x = checkpoint.checkpoint(l, x, self.dummy_tensor)
+            x = checkpoint.checkpoint(l, x, self.dummy_tensor, **self.checkpoint_kwargs)
         return x
 
 
@@ -292,45 +294,45 @@ class MedNeXt(nn.Module):
         x = self.stem(x)
         if self.outside_block_checkpointing:
             x_res_0 = self.iterative_checkpoint(self.enc_block_0, x)
-            x = checkpoint.checkpoint(self.down_0, x_res_0, self.dummy_tensor)
+            x = checkpoint.checkpoint(self.down_0, x_res_0, self.dummy_tensor, **self.checkpoint_kwargs)
             x_res_1 = self.iterative_checkpoint(self.enc_block_1, x)
-            x = checkpoint.checkpoint(self.down_1, x_res_1, self.dummy_tensor)
+            x = checkpoint.checkpoint(self.down_1, x_res_1, self.dummy_tensor, **self.checkpoint_kwargs)
             x_res_2 = self.iterative_checkpoint(self.enc_block_2, x)
-            x = checkpoint.checkpoint(self.down_2, x_res_2, self.dummy_tensor)
+            x = checkpoint.checkpoint(self.down_2, x_res_2, self.dummy_tensor, **self.checkpoint_kwargs)
             x_res_3 = self.iterative_checkpoint(self.enc_block_3, x)
-            x = checkpoint.checkpoint(self.down_3, x_res_3, self.dummy_tensor)
+            x = checkpoint.checkpoint(self.down_3, x_res_3, self.dummy_tensor, **self.checkpoint_kwargs)
 
             x = self.iterative_checkpoint(self.bottleneck, x)
             if self.do_ds:
-                x_ds_4 = checkpoint.checkpoint(self.out_4, x, self.dummy_tensor)
+                x_ds_4 = checkpoint.checkpoint(self.out_4, x, self.dummy_tensor, **self.checkpoint_kwargs)
 
-            x_up_3 = checkpoint.checkpoint(self.up_3, x, self.dummy_tensor)
+            x_up_3 = checkpoint.checkpoint(self.up_3, x, self.dummy_tensor, **self.checkpoint_kwargs)
             dec_x = x_res_3 + x_up_3 
             x = self.iterative_checkpoint(self.dec_block_3, dec_x)
             if self.do_ds:
-                x_ds_3 = checkpoint.checkpoint(self.out_3, x, self.dummy_tensor)
+                x_ds_3 = checkpoint.checkpoint(self.out_3, x, self.dummy_tensor, **self.checkpoint_kwargs)
             del x_res_3, x_up_3
 
-            x_up_2 = checkpoint.checkpoint(self.up_2, x, self.dummy_tensor)
+            x_up_2 = checkpoint.checkpoint(self.up_2, x, self.dummy_tensor, **self.checkpoint_kwargs)
             dec_x = x_res_2 + x_up_2 
             x = self.iterative_checkpoint(self.dec_block_2, dec_x)
             if self.do_ds:
-                x_ds_2 = checkpoint.checkpoint(self.out_2, x, self.dummy_tensor)
+                x_ds_2 = checkpoint.checkpoint(self.out_2, x, self.dummy_tensor, **self.checkpoint_kwargs)
             del x_res_2, x_up_2
 
-            x_up_1 = checkpoint.checkpoint(self.up_1, x, self.dummy_tensor)
+            x_up_1 = checkpoint.checkpoint(self.up_1, x, self.dummy_tensor, **self.checkpoint_kwargs)
             dec_x = x_res_1 + x_up_1 
             x = self.iterative_checkpoint(self.dec_block_1, dec_x)
             if self.do_ds:
-                x_ds_1 = checkpoint.checkpoint(self.out_1, x, self.dummy_tensor)
+                x_ds_1 = checkpoint.checkpoint(self.out_1, x, self.dummy_tensor, **self.checkpoint_kwargs)
             del x_res_1, x_up_1
 
-            x_up_0 = checkpoint.checkpoint(self.up_0, x, self.dummy_tensor)
+            x_up_0 = checkpoint.checkpoint(self.up_0, x, self.dummy_tensor, **self.checkpoint_kwargs)
             dec_x = x_res_0 + x_up_0 
             x = self.iterative_checkpoint(self.dec_block_0, dec_x)
             del x_res_0, x_up_0, dec_x
 
-            x = checkpoint.checkpoint(self.out_0, x, self.dummy_tensor)
+            x = checkpoint.checkpoint(self.out_0, x, self.dummy_tensor, **self.checkpoint_kwargs)
 
         else:
             x_res_0 = self.enc_block_0(x)
