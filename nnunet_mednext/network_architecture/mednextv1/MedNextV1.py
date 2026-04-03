@@ -288,9 +288,10 @@ class MedNeXt(nn.Module):
             x = checkpoint.checkpoint(l, x, self.dummy_tensor, **self.checkpoint_kwargs)
         return x
 
+    def _forward_decoder_features(self, x, collect_ds_outputs=False):
+        """Run the shared trunk and return final decoder features plus optional DS logits."""
+        ds_outputs = [None, None, None, None] if (collect_ds_outputs and self.do_ds) else None
 
-    def forward(self, x):
-        
         x = self.stem(x)
         if self.outside_block_checkpointing:
             x_res_0 = self.iterative_checkpoint(self.enc_block_0, x)
@@ -303,36 +304,42 @@ class MedNeXt(nn.Module):
             x = checkpoint.checkpoint(self.down_3, x_res_3, self.dummy_tensor, **self.checkpoint_kwargs)
 
             x = self.iterative_checkpoint(self.bottleneck, x)
-            if self.do_ds:
-                x_ds_4 = checkpoint.checkpoint(self.out_4, x, self.dummy_tensor, **self.checkpoint_kwargs)
+            if ds_outputs is not None:
+                ds_outputs[3] = checkpoint.checkpoint(
+                    self.out_4, x, self.dummy_tensor, **self.checkpoint_kwargs
+                )
 
             x_up_3 = checkpoint.checkpoint(self.up_3, x, self.dummy_tensor, **self.checkpoint_kwargs)
-            dec_x = x_res_3 + x_up_3 
+            dec_x = x_res_3 + x_up_3
             x = self.iterative_checkpoint(self.dec_block_3, dec_x)
-            if self.do_ds:
-                x_ds_3 = checkpoint.checkpoint(self.out_3, x, self.dummy_tensor, **self.checkpoint_kwargs)
+            if ds_outputs is not None:
+                ds_outputs[2] = checkpoint.checkpoint(
+                    self.out_3, x, self.dummy_tensor, **self.checkpoint_kwargs
+                )
             del x_res_3, x_up_3
 
             x_up_2 = checkpoint.checkpoint(self.up_2, x, self.dummy_tensor, **self.checkpoint_kwargs)
-            dec_x = x_res_2 + x_up_2 
+            dec_x = x_res_2 + x_up_2
             x = self.iterative_checkpoint(self.dec_block_2, dec_x)
-            if self.do_ds:
-                x_ds_2 = checkpoint.checkpoint(self.out_2, x, self.dummy_tensor, **self.checkpoint_kwargs)
+            if ds_outputs is not None:
+                ds_outputs[1] = checkpoint.checkpoint(
+                    self.out_2, x, self.dummy_tensor, **self.checkpoint_kwargs
+                )
             del x_res_2, x_up_2
 
             x_up_1 = checkpoint.checkpoint(self.up_1, x, self.dummy_tensor, **self.checkpoint_kwargs)
-            dec_x = x_res_1 + x_up_1 
+            dec_x = x_res_1 + x_up_1
             x = self.iterative_checkpoint(self.dec_block_1, dec_x)
-            if self.do_ds:
-                x_ds_1 = checkpoint.checkpoint(self.out_1, x, self.dummy_tensor, **self.checkpoint_kwargs)
+            if ds_outputs is not None:
+                ds_outputs[0] = checkpoint.checkpoint(
+                    self.out_1, x, self.dummy_tensor, **self.checkpoint_kwargs
+                )
             del x_res_1, x_up_1
 
             x_up_0 = checkpoint.checkpoint(self.up_0, x, self.dummy_tensor, **self.checkpoint_kwargs)
-            dec_x = x_res_0 + x_up_0 
+            dec_x = x_res_0 + x_up_0
             x = self.iterative_checkpoint(self.dec_block_0, dec_x)
             del x_res_0, x_up_0, dec_x
-
-            x = checkpoint.checkpoint(self.out_0, x, self.dummy_tensor, **self.checkpoint_kwargs)
 
         else:
             x_res_0 = self.enc_block_0(x)
@@ -345,40 +352,56 @@ class MedNeXt(nn.Module):
             x = self.down_3(x_res_3)
 
             x = self.bottleneck(x)
-            if self.do_ds:
-                x_ds_4 = self.out_4(x)
+            if ds_outputs is not None:
+                ds_outputs[3] = self.out_4(x)
 
             x_up_3 = self.up_3(x)
-            dec_x = x_res_3 + x_up_3 
+            dec_x = x_res_3 + x_up_3
             x = self.dec_block_3(dec_x)
-
-            if self.do_ds:
-                x_ds_3 = self.out_3(x)
+            if ds_outputs is not None:
+                ds_outputs[2] = self.out_3(x)
             del x_res_3, x_up_3
 
             x_up_2 = self.up_2(x)
-            dec_x = x_res_2 + x_up_2 
+            dec_x = x_res_2 + x_up_2
             x = self.dec_block_2(dec_x)
-            if self.do_ds:
-                x_ds_2 = self.out_2(x)
+            if ds_outputs is not None:
+                ds_outputs[1] = self.out_2(x)
             del x_res_2, x_up_2
 
             x_up_1 = self.up_1(x)
-            dec_x = x_res_1 + x_up_1 
+            dec_x = x_res_1 + x_up_1
             x = self.dec_block_1(dec_x)
-            if self.do_ds:
-                x_ds_1 = self.out_1(x)
+            if ds_outputs is not None:
+                ds_outputs[0] = self.out_1(x)
             del x_res_1, x_up_1
 
             x_up_0 = self.up_0(x)
-            dec_x = x_res_0 + x_up_0 
+            dec_x = x_res_0 + x_up_0
             x = self.dec_block_0(dec_x)
             del x_res_0, x_up_0, dec_x
 
-            x = self.out_0(x)
+        return x, ds_outputs
+
+    def forward_features(self, x):
+        """Return the shared final decoder feature map before the main output projection."""
+        features, _ = self._forward_decoder_features(x, collect_ds_outputs=False)
+        return features
+
+    def forward_output(self, features):
+        """Project final decoder features into the main output logits."""
+        if self.outside_block_checkpointing:
+            return checkpoint.checkpoint(
+                self.out_0, features, self.dummy_tensor, **self.checkpoint_kwargs
+            )
+        return self.out_0(features)
+
+    def forward(self, x):
+        x, ds_outputs = self._forward_decoder_features(x, collect_ds_outputs=self.do_ds)
+        x = self.forward_output(x)
 
         if self.do_ds:
-            return [x, x_ds_1, x_ds_2, x_ds_3, x_ds_4]
+            return [x] + ds_outputs
         else: 
             return x
 
